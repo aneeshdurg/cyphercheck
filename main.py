@@ -53,6 +53,8 @@ def extractOutputVariables(ctx):
             variables.append((ctx.getText(), ctx.start))
             return False
         return True
+    visitor(ctx, extractVariablesHelper)
+    return variables
 
 
 def extractInputVariables(ctx):
@@ -85,10 +87,10 @@ def main(argv):
 
     query = tree.oC_Statement().oC_Query()
     regular_query = query.oC_RegularQuery()
-    assert regular_query
+    assert regular_query, "Unsupported query"
 
     single_query = regular_query.oC_SingleQuery()
-    # TODO handle oC_Unions
+    assert single_query, "Unsupported query"
 
     errors = 0
 
@@ -96,7 +98,7 @@ def main(argv):
         reading_ctxs = ctx.oC_ReadingClause()
         scope = {}
         for rctx in reading_ctxs:
-            for var in extractVariables(rctx):
+            for var in extractOutputVariables(rctx):
                 if var[0] not in scope:
                     scope[var[0]] = []
                 scope[var[0]].append(var[1])
@@ -109,6 +111,8 @@ def main(argv):
                 c = var[1].column
                 log(f"Unknown variable `{var[0]}`", l, c)
                 errors += 1
+    else:
+        raise Exception("Unsupported query")
 
     return errors
 
