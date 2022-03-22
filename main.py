@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import argparse
 import sys
 
@@ -77,6 +78,19 @@ def extractInputVariables(ctx):
     return variables
 
 
+def hasMerge(ctx):
+    found_merge = False
+    def helper(ctx):
+        nonlocal found_merge
+        if isinstance(ctx, CypherParser.OC_MergeContext):
+            found_merge = True
+            return False
+        return True
+
+    visitor(ctx, helper)
+    return found_merge
+
+
 def main(argv):
     global file_contents
 
@@ -103,6 +117,9 @@ def main(argv):
     tree = parser.oC_Cypher()
 
     query = tree.oC_Statement().oC_Query()
+
+    assert not hasMerge(query), "Unsupported query - merge not implemented"
+
     regular_query = query.oC_RegularQuery()
     assert regular_query, "Unsupported query"
 
@@ -114,20 +131,38 @@ def main(argv):
     if (ctx := single_query.oC_SinglePartQuery()):
         reading_ctxs = ctx.oC_ReadingClause()
         scope = {}
-        for rctx in reading_ctxs:
-            for var in extractOutputVariables(rctx):
+
+        def checkInScope(variables):
+            nonlocal scope
+            nonlocal errors
+            for var in variables:
+                if var[0] not in scope:
+                    l = var[1].line
+                    c = var[1].column
+                    log(f"UndefinedVariable: `{var[0]}`", l, c)
+                    errors += 1
+
+        def addToScope(variables):
+            nonlocal scope
+            for var in variables:
                 if var[0] not in scope:
                     scope[var[0]] = []
                 scope[var[0]].append(var[1])
 
-        return_ctx = ctx.oC_Return()
-        return_vars = extractInputVariables(return_ctx)
-        for var in return_vars:
-            if var[0] not in scope:
-                l = var[1].line
-                c = var[1].column
-                log(f"Unknown variable `{var[0]}`", l, c)
-                errors += 1
+        for rctx in reading_ctxs:
+            addToScope(extractOutputVariables(rctx))
+
+        updating_ctxs = ctx.oC_UpdatingClause()
+        for uctx in updating_ctxs:
+            if createctx := uctx.oC_Create():
+                # TODO check for illegal redefinition
+                addToScope(extractOutputVariables(createctx))
+            else:
+                checkInScope(extractInputVariables(uctx))
+
+        if return_ctx := ctx.oC_Return():
+            return_vars = extractInputVariables(return_ctx)
+            checkInScope(return_vars)
     else:
         raise Exception("Unsupported query")
 
