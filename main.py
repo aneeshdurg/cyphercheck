@@ -1,5 +1,8 @@
+import argparse
 import sys
+
 from antlr4 import *
+
 from gen.CypherLexer import CypherLexer
 from gen.CypherParser import CypherParser
 
@@ -76,10 +79,24 @@ def extractInputVariables(ctx):
 
 def main(argv):
     global file_contents
-    with open(argv[1]) as f:
-        file_contents = f.readlines()
 
-    input_stream = FileStream(argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--query", action="store")
+    parser.add_argument("--file", action="store")
+
+    args = parser.parse_args(argv)
+
+    input_stream = None
+    if args.query:
+        file_contents = args.query.split("\n")
+        input_stream = InputStream(args.query)
+    elif args.file:
+        with open(args.file) as f:
+            file_contents = f.readlines()
+        input_stream = FileStream(args.file)
+    else:
+        assert False
+
     lexer = CypherLexer(input_stream)
     stream = CommonTokenStream(lexer)
     parser = CypherParser(stream)
@@ -117,4 +134,4 @@ def main(argv):
     return errors
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv))
+    sys.exit(main(sys.argv[1:]))
