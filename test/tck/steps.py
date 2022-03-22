@@ -1,3 +1,6 @@
+import os
+import subprocess
+
 from behave import given, when, then, step
 
 
@@ -6,11 +9,20 @@ from behave import given, when, then, step
 @given('the binary-tree-1 graph')
 @given('the binary-tree-2 graph')
 @given('after having executed')
-@given('having executed')
-@then('having executed')
 @given('there exists a procedure {proc}')
 def step_impl(context, **kwargs):
     pass
+
+
+@given('having executed')
+@then('having executed')
+@when('executing control query')
+@when('executing query')
+def executing_query(context):
+    exe_path = os.environ['CYPHERCHECK']
+    cmd = [exe_path, '--query', context.text]
+    context.proc = subprocess.Popen(
+        cmd, stderr=subprocess.PIPE)
 
 
 @given('parameter values are')
@@ -23,9 +35,15 @@ def params_wrapper_2(context):
     pass
 
 
-@when('executing control query')
-def execute_control_query(context):
-    pass
+@then('a SyntaxError should be raised at compile time: {error}')
+def syntax_error(context, error):
+    context.proc.wait()
+    stderr = context.proc.stderr.read().decode()
+    if 'Unsupported query' in stderr:
+        raise Exception('Unsupported query')
+    assert 'UndefinedVariable' in stderr
+    assert context.proc.returncode != 0
+
 
 @then('the result should be empty')
 @then('the result should be (ignoring element order for lists)')
@@ -33,36 +51,12 @@ def execute_control_query(context):
 @then('the result should be, in order')
 @then('the side effects should be')
 @then('no side effects')
-def step_impl(context):
-    pass
-
-
-@then('a {errorType} should be raised at runtime: {error}')
-def runtime_errors(context, errorType, error):
-    pass
-
-
 @then('{errorType} should be raised at runtime: {error}')
-def runtime_errors(context, errorType, error):
-    pass
-
-
-@when('executing query')
-def executing_query(context):
-    pass
-
-
-@then('a SyntaxError should be raised at compile time: {error}')
-def syntax_error(context, error):
-    # assert False
-    pass
-
-
-@then('{errorType} should be raised at compile time: {error}')
-def generic_compile_time_error(context, errorType, error):
-    pass
-
-
 @then('{errorType} should be raised at any time: {error}')
-def any_time_error(context, errorType, error):
-    pass
+@then('{errorType} should be raised at compile time: {error}')
+def step_impl(context, **kwargs):
+    context.proc.wait()
+    stderr = context.proc.stderr.read().decode()
+    if 'Unsupported query' in stderr:
+        raise Exception('Unsupported query')
+    assert not stderr
