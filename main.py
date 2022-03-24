@@ -23,6 +23,8 @@ def visitor(ctx, f):
         return
     try:
         children = ctx.children
+        if not children:
+            children = []
     except AttributeError:
         children = []
 
@@ -52,6 +54,9 @@ def extractOutputVariables(ctx):
             if vctx := ctx.oC_Variable():
                 for var in extractVariables(vctx):
                     variables.append(var)
+            elif isinstance(ctx, CypherParser.OC_ProjectionItemContext):
+                expr = ctx.oC_Expression()
+                variables.append((expr.getText(), expr.start))
             return False
         elif isinstance(ctx, CypherParser.OC_VariableContext):
             variables.append((ctx.getText(), ctx.start))
@@ -78,17 +83,86 @@ def extractInputVariables(ctx):
     return variables
 
 
-def hasMerge(ctx):
+def hasType(ctx, type_):
     found_merge = False
     def helper(ctx):
         nonlocal found_merge
-        if isinstance(ctx, CypherParser.OC_MergeContext):
+        if isinstance(ctx, type_):
             found_merge = True
             return False
         return True
 
     visitor(ctx, helper)
     return found_merge
+
+
+def addToScope(scope, variables):
+    for var in variables:
+        if var[0] not in scope:
+            scope[var[0]] = []
+        # TODO redefinition of variable should be an error!
+        scope[var[0]].append(var[1])
+
+
+def checkInScope(scope, variables):
+    errors = 0
+    for var in variables:
+        if var[0] not in scope:
+            l = var[1].line
+            c = var[1].column
+            log(f"UndefinedVariable: `{var[0]}`", l, c)
+            errors += 1
+    return errors
+
+
+def handleReadCtx(scope, readCtx):
+    if callCtx := readCtx.oC_InQueryCall():
+        if yieldItemsCtx := callCtx.oC_YieldItems():
+            # TODO handle YIELD *
+            for yieldItemCtx in yieldItemsCtx.oC_YieldItem():
+                ctx = yieldItemCtx.oC_Variable()
+                scope[ctx.getText()] = [ctx.start]
+
+    addToScope(scope, extractOutputVariables(readCtx))
+    return 0
+
+
+def handleUpdateCtx(scope, uctx):
+    errors = 0
+    if createctx := uctx.oC_Create():
+        # TODO check for illegal redefinition
+        addToScope(scope, extractOutputVariables(createctx))
+    else:
+        errors += checkInScope(scope, extractInputVariables(uctx))
+    return errors
+
+
+def handleWithOrReturnCtx(scope, withOrReturnCtx):
+    return_vars = extractInputVariables(withOrReturnCtx)
+    errors = checkInScope(scope, return_vars)
+
+    # TODO handle with *
+    for k in list(scope.keys()):
+        del scope[k]
+    addToScope(scope, extractOutputVariables(withOrReturnCtx))
+    return errors
+
+
+def processQuery(scope, queryCtx):
+    errors = 0
+    children = queryCtx.children
+    for child in children:
+        if isinstance(child, CypherParser.OC_ReadingClauseContext):
+            errors += handleReadCtx(scope, child)
+        elif isinstance(child, CypherParser.OC_UpdatingClauseContext):
+            errors += handleUpdateCtx(scope, child)
+        elif isinstance(child, CypherParser.OC_WithContext):
+            errors += handleWithOrReturnCtx(scope, child)
+        elif isinstance(child, CypherParser.OC_ReturnContext):
+            errors += handleWithOrReturnCtx(scope, child)
+        elif isinstance(child, CypherParser.OC_SinglePartQueryContext):
+            errors += processQuery(scope, child)
+    return errors
 
 
 def main(argv):
@@ -117,56 +191,27 @@ def main(argv):
     tree = parser.oC_Cypher()
 
     query = tree.oC_Statement().oC_Query()
+    assert not hasType(query, CypherParser.OC_MergeContext), (
+        "Unsupported query - merge not implemented")
+    assert not hasType(query, CypherParser.OC_UnionContext), (
+        "Unsupported query - union not implemented")
+    assert not hasType(query, CypherParser.OC_WhereContext), (
+        "Unsupported query - where not implemented")
 
-    assert not hasMerge(query), "Unsupported query - merge not implemented"
+    if callquery := query.oC_StandaloneCall():
+        if yield_items := callquery.oC_YieldItems():
+            variables = []
+            for yield_item in yield_items.oC_YieldItem():
+                variables += extractVariables(yield_item)
+        return
 
     regular_query = query.oC_RegularQuery()
-    assert regular_query, "Unsupported query"
+    assert regular_query
 
     single_query = regular_query.oC_SingleQuery()
-    assert single_query, "Unsupported query"
 
-    errors = 0
-
-    if (ctx := single_query.oC_SinglePartQuery()):
-        reading_ctxs = ctx.oC_ReadingClause()
-        scope = {}
-
-        def checkInScope(variables):
-            nonlocal scope
-            nonlocal errors
-            for var in variables:
-                if var[0] not in scope:
-                    l = var[1].line
-                    c = var[1].column
-                    log(f"UndefinedVariable: `{var[0]}`", l, c)
-                    errors += 1
-
-        def addToScope(variables):
-            nonlocal scope
-            for var in variables:
-                if var[0] not in scope:
-                    scope[var[0]] = []
-                scope[var[0]].append(var[1])
-
-        for rctx in reading_ctxs:
-            addToScope(extractOutputVariables(rctx))
-
-        updating_ctxs = ctx.oC_UpdatingClause()
-        for uctx in updating_ctxs:
-            if createctx := uctx.oC_Create():
-                # TODO check for illegal redefinition
-                addToScope(extractOutputVariables(createctx))
-            else:
-                checkInScope(extractInputVariables(uctx))
-
-        if return_ctx := ctx.oC_Return():
-            return_vars = extractInputVariables(return_ctx)
-            checkInScope(return_vars)
-    else:
-        raise Exception("Unsupported query")
-
-    return errors
+    scope = {}
+    return processQuery(scope, single_query.children[0])
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))

@@ -37,10 +37,12 @@ def params_wrapper_2(context):
 
 @then('a SyntaxError should be raised at compile time: {error}')
 def syntax_error(context, error):
+    if error != 'UndefinedVariable':
+        return
     context.proc.wait()
     stderr = context.proc.stderr.read().decode()
     if 'Unsupported query' in stderr:
-        raise Exception('Unsupported query')
+        raise Exception('Unsupported query {}'.format(stderr))
     assert 'UndefinedVariable' in stderr
     assert context.proc.returncode != 0
 
@@ -58,5 +60,5 @@ def step_impl(context, **kwargs):
     context.proc.wait()
     stderr = context.proc.stderr.read().decode()
     if 'Unsupported query' in stderr:
-        raise Exception('Unsupported query')
+        raise Exception('Unsupported query {}'.format(stderr))
     assert not stderr
