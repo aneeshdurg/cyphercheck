@@ -97,8 +97,6 @@ def extractDefinedVariables(ctx):
 
 
 def extractAtomVariables(ctx):
-    # TODO need an actual input detecting visitor to handle:
-    # MATCH (b {id: b.id})
     variables = []
 
     def visit(ctx):
