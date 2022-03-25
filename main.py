@@ -71,6 +71,7 @@ class Scope:
 def extractDefinedVariables(ctx):
     """Extract variables that were defined in this context."""
     variables = []
+
     def visit(ctx):
         # These are all clauses that can define variables
         defining_clauses = (
@@ -78,7 +79,8 @@ def extractDefinedVariables(ctx):
             CypherParser.OC_UnwindContext,
             CypherParser.OC_YieldItemContext,
             CypherParser.OC_NodePatternContext,
-            CypherParser.OC_RelationshipDetailContext)
+            CypherParser.OC_RelationshipDetailContext,
+        )
         if isinstance(ctx, defining_clauses):
             if vctx := ctx.oC_Variable():
                 variables.append(Variable(vctx))
@@ -89,6 +91,7 @@ def extractDefinedVariables(ctx):
                 variables.append(Variable(expr))
             return False
         return True
+
     visitor(ctx, visit)
     return variables
 
@@ -97,6 +100,7 @@ def extractAtomVariables(ctx):
     # TODO need an actual input detecting visitor to handle:
     # MATCH (b {id: b.id})
     variables = []
+
     def visit(ctx):
         if isinstance(ctx, CypherParser.OC_AtomContext):
             if vctx := ctx.oC_Variable():
@@ -163,12 +167,15 @@ def main(argv):
     tree = parser.oC_Cypher()
 
     query = tree.oC_Statement().oC_Query()
-    assert not hasType(query, CypherParser.OC_MergeContext), (
-        "Unsupported query - merge not implemented")
-    assert not hasType(query, CypherParser.OC_UnionContext), (
-        "Unsupported query - union not implemented")
-    assert not hasType(query, CypherParser.OC_WhereContext), (
-        "Unsupported query - where not implemented")
+    assert not hasType(
+        query, CypherParser.OC_MergeContext
+    ), "Unsupported query - merge not implemented"
+    assert not hasType(
+        query, CypherParser.OC_UnionContext
+    ), "Unsupported query - union not implemented"
+    assert not hasType(
+        query, CypherParser.OC_WhereContext
+    ), "Unsupported query - where not implemented"
 
     if callquery := query.oC_StandaloneCall():
         if yield_items := callquery.oC_YieldItems():
@@ -185,5 +192,6 @@ def main(argv):
     scope = Scope()
     return processQuery(scope, single_query.children[0])
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
