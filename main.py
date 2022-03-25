@@ -2,14 +2,18 @@
 import argparse
 import sys
 
+from dataclasses import dataclass
+from typing import List
+
 from antlr4 import *
 
 from gen.CypherLexer import CypherLexer
 from gen.CypherParser import CypherParser
 
+from visitor import *
+
 
 file_contents = []
-
 
 
 def log(msg, l, c):
@@ -18,148 +22,116 @@ def log(msg, l, c):
     print(f"{' ' * c}^", file=sys.stderr)
 
 
-def visitor(ctx, f):
-    if not f(ctx):
-        return
-    try:
-        children = ctx.children
-        if not children:
-            children = []
-    except AttributeError:
-        children = []
+@dataclass
+class Variable:
+    ctx: ParserRuleContext
 
-    for c in children:
-        visitor(c, f)
+    @property
+    def name(self):
+        return self.ctx.getText()
+
+    @property
+    def line(self):
+        return self.ctx.start.line
+
+    @property
+    def col(self):
+        return self.ctx.start.column
 
 
-def extractVariables(ctx):
-    variables = []
-    def extractVariablesHelper(ctx):
-        if isinstance(ctx, CypherParser.OC_VariableContext):
-            variables.append((ctx.getText(), ctx.start))
-            return False
+class Scope:
+    def __init__(self):
+        self.variables = {}
+
+    def add(self, variables: List[Variable]) -> bool:
+        for var in variables:
+            if var.name in self.variables:
+                return False
+            self.variables[var.name] = var
         return True
 
-    visitor(ctx, extractVariablesHelper)
-    return variables
+    def checkInScope(self, ctxs: List[Variable]) -> None:
+        missing = 0
+        for ctx in ctxs:
+            if ctx.name not in self.variables:
+                log("UndefinedVariable", ctx.line, ctx.col)
+                missing += 1
+        return missing
+
+    def clear(self):
+        self.variables = {}
+
+    def debug(self, tag):
+        print(f"scope: {tag}")
+        for var in self.variables:
+            ctx = self.variables[var]
+            print("  {}: {},{}".format(var, ctx.line, ctx.col))
 
 
-def extractOutputVariables(ctx):
+def extractDefinedVariables(ctx):
+    """Extract variables that were defined in this context."""
     variables = []
-    def extractVariablesHelper(ctx):
-        outputting_clauses = (
+    def visit(ctx):
+        # These are all clauses that can define variables
+        defining_clauses = (
             CypherParser.OC_ProjectionItemContext,
-            CypherParser.OC_UnwindContext)
-        if isinstance(ctx, outputting_clauses):
+            CypherParser.OC_UnwindContext,
+            CypherParser.OC_YieldItemContext,
+            CypherParser.OC_NodePatternContext,
+            CypherParser.OC_RelationshipDetailContext)
+        if isinstance(ctx, defining_clauses):
             if vctx := ctx.oC_Variable():
-                for var in extractVariables(vctx):
-                    variables.append(var)
+                variables.append(Variable(vctx))
             elif isinstance(ctx, CypherParser.OC_ProjectionItemContext):
+                # If a projection is just an expression with no "AS" that
+                # expression gets propogated as a column name
                 expr = ctx.oC_Expression()
-                variables.append((expr.getText(), expr.start))
-            return False
-        elif isinstance(ctx, CypherParser.OC_VariableContext):
-            variables.append((ctx.getText(), ctx.start))
+                variables.append(Variable(expr))
             return False
         return True
-    visitor(ctx, extractVariablesHelper)
+    visitor(ctx, visit)
     return variables
 
 
-def extractInputVariables(ctx):
+def extractAtomVariables(ctx):
+    # TODO need an actual input detecting visitor to handle:
+    # MATCH (b {id: b.id})
     variables = []
-    def extractVariablesHelper(ctx):
-        if isinstance(ctx, CypherParser.OC_ProjectionItemContext):
-            for var in extractVariables(ctx.oC_Expression()):
-                variables.append(var)
-            # We don't want the output of a projection
-            return False
-        if isinstance(ctx, CypherParser.OC_VariableContext):
-            variables.append((ctx.getText(), ctx.start))
-            return False
+    def visit(ctx):
+        if isinstance(ctx, CypherParser.OC_AtomContext):
+            if vctx := ctx.oC_Variable():
+                variables.append(Variable(vctx))
+                return False
         return True
 
-    visitor(ctx, extractVariablesHelper)
+    visitor(ctx, visit)
     return variables
 
 
-def hasType(ctx, type_):
-    found_merge = False
-    def helper(ctx):
-        nonlocal found_merge
-        if isinstance(ctx, type_):
-            found_merge = True
-            return False
-        return True
-
-    visitor(ctx, helper)
-    return found_merge
-
-
-def addToScope(scope, variables):
-    for var in variables:
-        if var[0] not in scope:
-            scope[var[0]] = []
-        # TODO redefinition of variable should be an error!
-        scope[var[0]].append(var[1])
-
-
-def checkInScope(scope, variables):
-    errors = 0
-    for var in variables:
-        if var[0] not in scope:
-            l = var[1].line
-            c = var[1].column
-            log(f"UndefinedVariable: `{var[0]}`", l, c)
-            errors += 1
+def handleCtx(scope, ctx):
+    errors = scope.checkInScope(extractAtomVariables(ctx))
+    errors += scope.add(extractDefinedVariables(ctx))
     return errors
-
-
-def handleReadCtx(scope, readCtx):
-    if callCtx := readCtx.oC_InQueryCall():
-        if yieldItemsCtx := callCtx.oC_YieldItems():
-            # TODO handle YIELD *
-            for yieldItemCtx in yieldItemsCtx.oC_YieldItem():
-                ctx = yieldItemCtx.oC_Variable()
-                scope[ctx.getText()] = [ctx.start]
-
-    addToScope(scope, extractOutputVariables(readCtx))
-    return 0
 
 
 def handleUpdateCtx(scope, uctx):
-    errors = 0
-    if createctx := uctx.oC_Create():
-        # TODO check for illegal redefinition
-        addToScope(scope, extractOutputVariables(createctx))
-    else:
-        errors += checkInScope(scope, extractInputVariables(uctx))
+    errors = scope.add(extractDefinedVariables(uctx))
+    errors += scope.checkInScope(extractAtomVariables(uctx))
     return errors
 
 
-def handleWithOrReturnCtx(scope, withOrReturnCtx):
-    return_vars = extractInputVariables(withOrReturnCtx)
-    errors = checkInScope(scope, return_vars)
-
-    # TODO handle with *
-    for k in list(scope.keys()):
-        del scope[k]
-    addToScope(scope, extractOutputVariables(withOrReturnCtx))
-    return errors
-
-
-def processQuery(scope, queryCtx):
+def processQuery(scope: Scope, queryCtx) -> int:
     errors = 0
     children = queryCtx.children
     for child in children:
         if isinstance(child, CypherParser.OC_ReadingClauseContext):
-            errors += handleReadCtx(scope, child)
+            errors += handleCtx(scope, child)
         elif isinstance(child, CypherParser.OC_UpdatingClauseContext):
             errors += handleUpdateCtx(scope, child)
         elif isinstance(child, CypherParser.OC_WithContext):
-            errors += handleWithOrReturnCtx(scope, child)
+            errors += handleCtx(scope, child)
         elif isinstance(child, CypherParser.OC_ReturnContext):
-            errors += handleWithOrReturnCtx(scope, child)
+            errors += handleCtx(scope, child)
         elif isinstance(child, CypherParser.OC_SinglePartQueryContext):
             errors += processQuery(scope, child)
     return errors
@@ -200,9 +172,9 @@ def main(argv):
 
     if callquery := query.oC_StandaloneCall():
         if yield_items := callquery.oC_YieldItems():
-            variables = []
             for yield_item in yield_items.oC_YieldItem():
-                variables += extractVariables(yield_item)
+                # TODO ???
+                pass
         return
 
     regular_query = query.oC_RegularQuery()
@@ -210,7 +182,7 @@ def main(argv):
 
     single_query = regular_query.oC_SingleQuery()
 
-    scope = {}
+    scope = Scope()
     return processQuery(scope, single_query.children[0])
 
 if __name__ == '__main__':
