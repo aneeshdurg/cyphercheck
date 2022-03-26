@@ -13,15 +13,6 @@ from gen.CypherParser import CypherParser
 from visitor import *
 
 
-file_contents = []
-
-
-def log(msg, l, c):
-    print(f"{msg} on line: {l}, col: {c}", file=sys.stderr)
-    print(f"{file_contents[l - 1].strip()}", file=sys.stderr)
-    print(f"{' ' * c}^", file=sys.stderr)
-
-
 @dataclass
 class Variable:
     ctx: ParserRuleContext
@@ -41,9 +32,20 @@ class Variable:
 
 class Scope:
     variables: Dict[str, Variable]
+    file_contents: List[str]
 
-    def __init__(self):
+    def __init__(self, file_contents):
         self.variables = {}
+        self.file_contents = file_contents
+
+    def log(self, msg, l, c):
+        print(f"{msg} on line: {l}, col: {c}", file=sys.stderr)
+        print(f"{self.file_contents[l - 1].strip()}", file=sys.stderr)
+        print(f"{' ' * c}^", file=sys.stderr)
+
+    def logUndefined(self, undefined_vars: List[Variable]):
+        for var in undefined_vars:
+            self.log("UndefinedVariable", var.line, var.col)
 
     def add(self, variables: List[Variable]):
         for var in variables:
@@ -51,19 +53,12 @@ class Scope:
                 return
             self.variables[var.name] = var
 
-    def checkInScope(self, ctxs: List[Variable]) -> None:
-        missing = 0
-        for ctx in ctxs:
-            if ctx.name not in self.variables:
-                log("UndefinedVariable", ctx.line, ctx.col)
-                missing += 1
-        return missing
-
     def clear(self):
         self.variables = {}
 
-    def checkCtxForUndefinedVariables(self, ctx) -> List[Variable]:
+    def checkCtxForUndefinedVariables(self, ctx) -> int:
         undefined_vars = []
+
         def visit(ctx):
             nonlocal undefined_vars
 
@@ -81,7 +76,9 @@ class Scope:
             return True
 
         visitor(ctx, visit)
-        return undefined_vars
+
+        self.logUndefined(undefined_vars)
+        return len(undefined_vars)
 
     def debug(self, tag):
         print(f"scope: {tag}")
@@ -118,34 +115,16 @@ def extractDefinedVariables(ctx):
     return variables
 
 
-def logUndefinedVariables(ctx):
-    variables = []
-
-    def visit(ctx):
-        if isinstance(ctx, CypherParser.OC_AtomContext):
-            if vctx := ctx.oC_Variable():
-                variables.append(Variable(vctx))
-                return False
-        return True
-
-    visitor(ctx, visit)
-    return variables
-
-
 def handleCtx(scope, ctx):
-    undefined_vars = scope.checkCtxForUndefinedVariables(ctx)
-    for var in undefined_vars:
-        log("UndefinedVariable", var.line, var.col)
+    errors = scope.checkCtxForUndefinedVariables(ctx)
     scope.add(extractDefinedVariables(ctx))
-    return len(undefined_vars)
+    return errors
 
 
 def handleUpdateCtx(scope, uctx):
     scope.add(extractDefinedVariables(uctx))
-    undefined_vars = scope.checkCtxForUndefinedVariables(uctx)
-    for var in undefined_vars:
-        log("UndefinedVariable", var.line, var.col)
-    return len(undefined_vars)
+    errors = scope.checkCtxForUndefinedVariables(uctx)
+    return errors
 
 
 def processQuery(scope: Scope, queryCtx) -> int:
@@ -166,8 +145,6 @@ def processQuery(scope: Scope, queryCtx) -> int:
 
 
 def main(argv):
-    global file_contents
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", action="store")
     parser.add_argument("--file", action="store")
@@ -175,12 +152,13 @@ def main(argv):
     args = parser.parse_args(argv)
 
     input_stream = None
+    scope = None
     if args.query:
-        file_contents = args.query.split("\n")
+        scope = Scope(args.query.split("\n"))
         input_stream = InputStream(args.query)
     elif args.file:
         with open(args.file) as f:
-            file_contents = f.readlines()
+            scope = Scope(f.readlines())
         input_stream = FileStream(args.file)
     else:
         assert False
@@ -213,7 +191,6 @@ def main(argv):
 
     single_query = regular_query.oC_SingleQuery()
 
-    scope = Scope()
     return processQuery(scope, single_query.children[0])
 
 
