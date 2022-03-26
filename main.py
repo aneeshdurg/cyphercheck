@@ -3,7 +3,7 @@ import argparse
 import sys
 
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List
 
 from antlr4 import *
 
@@ -40,15 +40,16 @@ class Variable:
 
 
 class Scope:
+    variables: Dict[str, Variable]
+
     def __init__(self):
         self.variables = {}
 
-    def add(self, variables: List[Variable]) -> bool:
+    def add(self, variables: List[Variable]):
         for var in variables:
             if var.name in self.variables:
-                return False
+                return
             self.variables[var.name] = var
-        return True
 
     def checkInScope(self, ctxs: List[Variable]) -> None:
         missing = 0
@@ -60,6 +61,27 @@ class Scope:
 
     def clear(self):
         self.variables = {}
+
+    def checkCtxForUndefinedVariables(self, ctx) -> List[Variable]:
+        undefined_vars = []
+        def visit(ctx):
+            nonlocal undefined_vars
+
+            if isinstance(ctx, CypherParser.OC_ExpressionContext):
+                # if this expression was a variable because of a projection,
+                # then stop here
+                if ctx.getText() in self.variables:
+                    return False
+                # recursively search this expression and find all atoms
+            elif isinstance(ctx, CypherParser.OC_AtomContext):
+                if vctx := ctx.oC_Variable():
+                    if vctx.getText() not in self.variables:
+                        undefined_vars.append(Variable(vctx))
+                        return False
+            return True
+
+        visitor(ctx, visit)
+        return undefined_vars
 
     def debug(self, tag):
         print(f"scope: {tag}")
@@ -96,7 +118,7 @@ def extractDefinedVariables(ctx):
     return variables
 
 
-def extractAtomVariables(ctx):
+def logUndefinedVariables(ctx):
     variables = []
 
     def visit(ctx):
@@ -111,15 +133,19 @@ def extractAtomVariables(ctx):
 
 
 def handleCtx(scope, ctx):
-    errors = scope.checkInScope(extractAtomVariables(ctx))
-    errors += scope.add(extractDefinedVariables(ctx))
-    return errors
+    undefined_vars = scope.checkCtxForUndefinedVariables(ctx)
+    for var in undefined_vars:
+        log("UndefinedVariable", var.line, var.col)
+    scope.add(extractDefinedVariables(ctx))
+    return len(undefined_vars)
 
 
 def handleUpdateCtx(scope, uctx):
-    errors = scope.add(extractDefinedVariables(uctx))
-    errors += scope.checkInScope(extractAtomVariables(uctx))
-    return errors
+    scope.add(extractDefinedVariables(uctx))
+    undefined_vars = scope.checkCtxForUndefinedVariables(uctx)
+    for var in undefined_vars:
+        log("UndefinedVariable", var.line, var.col)
+    return len(undefined_vars)
 
 
 def processQuery(scope: Scope, queryCtx) -> int:
