@@ -144,24 +144,9 @@ def processQuery(scope: Scope, queryCtx) -> int:
     return errors
 
 
-def main(argv):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--query", action="store")
-    parser.add_argument("--file", action="store")
-
-    args = parser.parse_args(argv)
-
-    input_stream = None
-    scope = None
-    if args.query:
-        scope = Scope(args.query.split("\n"))
-        input_stream = InputStream(args.query)
-    elif args.file:
-        with open(args.file) as f:
-            scope = Scope(f.readlines())
-        input_stream = FileStream(args.file)
-    else:
-        assert False
+def main(file_contents: List[str]) -> int:
+    input_stream = InputStream("".join(file_contents))
+    scope = Scope(file_contents)
 
     lexer = CypherLexer(input_stream)
     stream = CommonTokenStream(lexer)
@@ -195,4 +180,18 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--query", action="store")
+    parser.add_argument("--file", action="store")
+
+    args = parser.parse_args()
+
+    assert args.query or args.file, "One of --query and --file is required!"
+
+    input_stream = None
+    scope = None
+    if args.query:
+        sys.exit(main(args.query.split("\n")))
+    elif args.file:
+        with open(args.file) as f:
+            sys.exit(main(f.readlines()))
