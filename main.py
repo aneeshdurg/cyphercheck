@@ -144,16 +144,19 @@ def processQuery(scope: Scope, queryCtx) -> int:
     return errors
 
 
-def main(file_contents: List[str]) -> int:
-    input_stream = InputStream("".join(file_contents))
-    scope = Scope(file_contents)
-
+def getAST(query: str):
+    input_stream = InputStream(query)
     lexer = CypherLexer(input_stream)
     stream = CommonTokenStream(lexer)
     parser = CypherParser(stream)
-    tree = parser.oC_Cypher()
+    return parser.oC_Cypher()
 
-    query = tree.oC_Statement().oC_Query()
+
+def main(file_contents: List[str]) -> int:
+    scope = Scope(file_contents)
+    ast = getAST("".join(file_contents))
+
+    query = ast.oC_Statement().oC_Query()
     assert not hasType(
         query, CypherParser.OC_MergeContext
     ), "Unsupported query - merge not implemented"

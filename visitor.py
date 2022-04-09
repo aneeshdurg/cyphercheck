@@ -25,4 +25,14 @@ def hasType(ctx, type_):
     return found_merge
 
 
+def getType(ctx, type_):
+    ctxs = []
+    def helper(ctx):
+        nonlocal ctxs
+        if isinstance(ctx, type_):
+            ctxs.append(ctx)
+            return False
+        return True
 
+    visitor(ctx, helper)
+    return ctxs
