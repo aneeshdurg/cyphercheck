@@ -43,7 +43,7 @@ class Formatter:
 
     def add_or_indent_add(self, txt: str):
         if (len(txt) + self.last_line_length()) >= 80:
-            self.add_line(INDENT_STR + txt)
+            self.add_line(self.indent + txt)
         else:
             self.add_to_last_line(txt)
 
@@ -57,6 +57,10 @@ class Formatter:
         state = (len(self.out_stream), self.last_line_length())
         self.save_ctx.append(state)
 
+    def lines_increased(self):
+        state = (len(self.out_stream), self.last_line_length())
+        return state[0] != self.save_ctx[-1][0]
+
     def restore(self):
         state = self.save_ctx.pop()
         self.out_stream = self.out_stream[:state[0]]
@@ -65,10 +69,6 @@ class Formatter:
 
     def commit(self):
         self.save_ctx.pop()
-
-    def format_OC_VariableContext(self, ctx):
-        add_or_indent_add(ctx.getText())
-
 
     def get_formatted_function_args(self, needs_space, needs_comma, ctx):
         if needs_space:
@@ -82,11 +82,20 @@ class Formatter:
         finally:
             self.indent = self.indent[:-len(INDENT_STR)]
 
-    def format_OC_ExpressionContext(self, ctx, indent: str):
+    def format_OC_VariableContext(self, ctx):
         self.add_or_indent_add(ctx.getText())
+
+    def format_OC_LiteralContext(self, ctx):
+        if isinstance(ctx, CypherParser.OC_MapLiteralContext):
+            pass
+        elif isinstance(ctx, CypherParser.OC_ListLiteralContext):
+            pass
+        else:
+            self.add_or_indent_add(ctx.getText())
 
     def format_OC_FunctionInvocationContext(self, ctx, indent: str):
         start_call = ctx.oC_FunctionName().getText() + '('
+
         is_distinct = False
         def find_distinct(ctx):
             nonlocal is_distinct
@@ -95,6 +104,8 @@ class Formatter:
                     is_distinct = True
                 return False
             return True
+        visitor.visitor(ctx, find_distinct)
+
         self.add_or_indent_add(start_call)
 
         with self.indented():
@@ -112,12 +123,163 @@ class Formatter:
                 if not is_last:
                     if len(self.out_stream[-1]) >= MAX_LINE_LENGTH:
                         self.restore()
-                        self.add_line(indent)
+                        self.add_line(self.indent)
                         with self.indented():
                             self.format_OC_ExpressionContext(args[i], indent)
+                    else:
+                        self.commit()
                     self.add_ignoring_limit(",")
         self.add_or_indent_add(")")
 
+    def format_OC_NotExpressionContext(ctx):
+        not_count = 0
+        def count_nots(ctx):
+            nonlocal not_count
+            if isinstance(ctx, tree.Tree.TerminalNodeImpl):
+                if ctx.getText().lower == "not":
+                    not_count += 1
+                return False
+            return True
+        visitor(ctx, count_nots)
+        if (count_nots % 2) == 1:
+            self.save()
+            self.add_ignoring_limit(" NOT ")
+            if self.last_line_length() >= MAX_LINE_LENGTH:
+                self.restore()
+                self.add_line(self.indent)
+                self.add_or_indent_add("NOT ")
+
+
+    def format_OC_AndExpressionContext(ctx):
+        self.format_OC_BinExpressionContext(
+            ctx,
+            lambda x: x.oC_NotExpression(),
+            self.format_OC_NotExpressionContext,
+            "AND")
+
+    def format_OC_XOrExpressionContext(ctx):
+        self.format_OC_BinExpressionContext(
+            ctx,
+            lambda x: x.oC_AndExpression(),
+            self.format_OC_AndExpressionContext,
+            "XOR")
+
+    def format_OC_OrExpressionContext(ctx):
+        self.format_OC_BinExpressionContext(
+            ctx,
+            lambda x: x.oC_XOrExpression(),
+            self.format_OC_XOrExpressionContext,
+            "OR")
+
+    def format_OC_BinExpressionContext(ctx, get_next, formatter, op: str):
+        parts = get_next(ctx)
+        lhs = parts[0]
+        formatter(lhs)
+        if len(parts) > 1:
+            self.save()
+            self.add_ignoring_limit(f" {op} ")
+            if self.last_line_length() >= MAX_LINE_LENGTH:
+                self.restore()
+                self.add_line(self.indent)
+                self.add_or_indent_add(f"{op} ")
+            formatter(parts[1])
+
+
+    def format_OC_ExpressionContext(self, ctx):
+        self.format_OC_OrExpressionContext(ctx.oC_OrExpression())
+
+    def format_OC_ProjectionItemContext(self, ctx):
+        self.format_OC_ExpressionContext(ctx.oC_Expression())
+
+        var = ctx.oC_Variable()
+        if var:
+            self.save()
+            self.add_ignoring_limit(" AS ")
+            if self.last_line_length() >= MAX_LINE_LENGTH:
+                self.restore()
+                self.add_line(self.indent)
+                self.add_or_indent_add("AS ")
+            self.format_OC_VariableContext(var)
+
+    def format_OC_ProjectionItemsContext(self, ctx):
+        # TODO handle *
+        items = ctx.oC_ProjectionItem()
+        for i in range(len(items)):
+            self.save()
+            self.format_OC_ProjectionItemContext(items[i])
+            if i != (len(items) - 1):
+                self.add_ignoring_limit(",")
+                if len(self.out_stream[-1]) >= MAX_LINE_LENGTH:
+                    self.restore()
+                    self.add_line(self.indent)
+                    with self.indented():
+                        self.format_OC_ProjectionItemContext(items[i])
+                        self.add_ignoring_limit(",")
+
+    def format_OC_ProjectionBodyContext(self, ctx):
+        # TODO check for DISTINCT
+        is_distinct = False
+        def find_distinct(ctx):
+            nonlocal is_distinct
+            if isinstance(ctx, tree.Tree.TerminalNodeImpl):
+                if ctx.getText().lower == "distinct":
+                    is_distinct = True
+                return False
+            return True
+        visitor(ctx, find_distinct)
+
+        self.format_OC_ProjectionItemsContext(ctx.oC_ProjectionItems())
+
+        if is_distinct:
+            self.add_or_indent_add("DISTINCT ")
+
+        # TODO handle order, skip, limit
+
+    def format_OC_ReturnContext(self, ctx, retry=False):
+        if self.last_line_length() and not retry:
+            self.save()
+
+        self.add_or_indent_add("RETURN ")
+        self.format_OC_ProjectionBodyContext(ctx.oC_ProjectionBody())
+
+        if self.last_line_length() and not retry:
+            if self.lines_increased():
+                self.restore()
+                self.add_line(self.indent)
+                with self.indented():
+                    self.format_OC_ReturnContext(ctx, retry=True)
+
+    def format_OC_SinglePartQueryContext(self, ctx):
+        assert not ctx.oC_ReadingClause()
+        assert not ctx.oC_UpdatingClause()
+
+        ret = ctx.oC_Return()
+        assert ret
+        self.format_OC_ReturnContext(ret)
+
+
+    def format_OC_SingleQueryContext(self, ctx):
+        assert not ctx.oC_MultiPartQuery()
+        query = ctx.oC_SinglePartQuery()
+        self.format_OC_SinglePartQueryContext(query)
+
+
+    def format_OC_RegularQueryContext(self, ctx):
+        query = ctx.oC_SingleQuery()
+        assert not ctx.oC_Union()
+        self.format_OC_SingleQueryContext(query)
+
+    def format_OC_QueryContext(self, ctx):
+        query = ctx.oC_RegularQuery()
+        assert query
+        self.format_OC_RegularQueryContext(query)
+
+    def format_OC_StatementContext(self, ctx):
+        self.format_OC_QueryContext(ctx.oC_Query())
+
+    def format_OC_CypherContext(self, ctx):
+        stmt = ctx.oC_Statement()
+        self.format_OC_StatementContext(stmt)
 
 
 def main():
@@ -131,16 +293,19 @@ def main():
             fn_ctx = ctx
             return False
         return True
-    visitor(getAST(
+    ast = getAST(
         "RETURN asdf(0, 1, 2, 3, "
-        "'aaaaaaaaaa', 'bbbbbbbbbb', 'cccccccccc', 'dddddddddd', 'eeeeeeeeee',"
-        "'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz')"), get_fn_call)
-    assert fn_ctx is not None
+        "'aaaaaaaaaa', 'bbbbbbbbbb', 'cccccccccc', 'dddddddddd', 'eeeeeeeeee', 'ffffffffff', "
+        "'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz')")
 
-    print(fn_ctx)
+    # visitor(ast, get_fn_call)
+    # assert fn_ctx is not None
+
+    # print(fn_ctx)
 
     formatter = Formatter()
-    formatter.format_OC_FunctionInvocationContext(fn_ctx, INDENT_STR)
+    # formatter.format_OC_FunctionInvocationContext(fn_ctx, INDENT_STR)
+    formatter.format_OC_CypherContext(ast)
     print('\n'.join(formatter.out_stream))
 
 
