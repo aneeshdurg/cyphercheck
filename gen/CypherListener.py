@@ -683,6 +683,15 @@ class CypherListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by CypherParser#oC_ExistentialSubquery.
+    def enterOC_ExistentialSubquery(self, ctx:CypherParser.OC_ExistentialSubqueryContext):
+        pass
+
+    # Exit a parse tree produced by CypherParser#oC_ExistentialSubquery.
+    def exitOC_ExistentialSubquery(self, ctx:CypherParser.OC_ExistentialSubqueryContext):
+        pass
+
+
     # Enter a parse tree produced by CypherParser#oC_ExplicitProcedureInvocation.
     def enterOC_ExplicitProcedureInvocation(self, ctx:CypherParser.OC_ExplicitProcedureInvocationContext):
         pass
@@ -764,12 +773,12 @@ class CypherListener(ParseTreeListener):
         pass
 
 
-    # Enter a parse tree produced by CypherParser#oC_CaseAlternatives.
-    def enterOC_CaseAlternatives(self, ctx:CypherParser.OC_CaseAlternativesContext):
+    # Enter a parse tree produced by CypherParser#oC_CaseAlternative.
+    def enterOC_CaseAlternative(self, ctx:CypherParser.OC_CaseAlternativeContext):
         pass
 
-    # Exit a parse tree produced by CypherParser#oC_CaseAlternatives.
-    def exitOC_CaseAlternatives(self, ctx:CypherParser.OC_CaseAlternativesContext):
+    # Exit a parse tree produced by CypherParser#oC_CaseAlternative.
+    def exitOC_CaseAlternative(self, ctx:CypherParser.OC_CaseAlternativeContext):
         pass
 
 

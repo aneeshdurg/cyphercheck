@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2015-2021 "Neo Technology,"
+ * Copyright (c) 2015-2022 "Neo Technology,"
  * Network Engine for Objects in Lund AB [http://neotechnology.com]
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -145,10 +145,10 @@ CALL : ( 'C' | 'c' ) ( 'A' | 'a' ) ( 'L' | 'l' ) ( 'L' | 'l' )  ;
 YIELD : ( 'Y' | 'y' ) ( 'I' | 'i' ) ( 'E' | 'e' ) ( 'L' | 'l' ) ( 'D' | 'd' )  ;
 
 oC_StandaloneCall
-              :  CALL SP ( oC_ExplicitProcedureInvocation | oC_ImplicitProcedureInvocation ) ( SP YIELD SP oC_YieldItems )? ;
+              :  CALL SP ( oC_ExplicitProcedureInvocation | oC_ImplicitProcedureInvocation ) ( SP? YIELD SP ( '*' | oC_YieldItems ) )? ;
 
 oC_YieldItems
-          :  ( '*' | ( oC_YieldItem ( SP? ',' SP? oC_YieldItem )* ) ) ( SP? oC_Where )? ;
+          :  oC_YieldItem ( SP? ',' SP? oC_YieldItem )* ( SP? oC_Where )? ;
 
 oC_YieldItem
          :  ( oC_ProcedureResultField SP AS SP )? oC_Variable ;
@@ -302,7 +302,9 @@ oC_PowerOfExpression
                  :  oC_UnaryAddOrSubtractExpression ( SP? '^' SP? oC_UnaryAddOrSubtractExpression )* ;
 
 oC_UnaryAddOrSubtractExpression
-                            :  ( ( '+' | '-' ) SP? )* oC_StringListNullOperatorExpression ;
+                            :  oC_StringListNullOperatorExpression
+                                | ( ( '+' | '-' ) SP? oC_StringListNullOperatorExpression )
+                                ;
 
 oC_StringListNullOperatorExpression
                                 :  oC_PropertyOrLabelsExpression ( oC_StringOperatorExpression | oC_ListOperatorExpression | oC_NullOperatorExpression )* ;
@@ -350,6 +352,7 @@ oC_Atom
         | oC_RelationshipsPattern
         | oC_ParenthesizedExpression
         | oC_FunctionInvocation
+        | oC_ExistentialSubquery
         | oC_Variable
         ;
 
@@ -407,9 +410,10 @@ oC_FunctionInvocation
                   :  oC_FunctionName SP? '(' SP? ( DISTINCT SP? )? ( oC_Expression SP? ( ',' SP? oC_Expression SP? )* )? ')' ;
 
 oC_FunctionName
-            :  ( oC_Namespace oC_SymbolicName )
-                | EXISTS
-                ;
+            :  oC_Namespace oC_SymbolicName ;
+
+oC_ExistentialSubquery
+                   :  EXISTS SP? '{' SP? ( oC_RegularQuery | ( oC_Pattern ( SP? oC_Where )? ) ) SP? '}' ;
 
 EXISTS : ( 'E' | 'e' ) ( 'X' | 'x' ) ( 'I' | 'i' ) ( 'S' | 's' ) ( 'T' | 't' ) ( 'S' | 's' )  ;
 
@@ -432,13 +436,13 @@ oC_ListComprehension
                  :  '[' SP? oC_FilterExpression ( SP? '|' SP? oC_Expression )? SP? ']' ;
 
 oC_PatternComprehension
-                    :  '[' SP? ( oC_Variable SP? '=' SP? )? oC_RelationshipsPattern SP? ( WHERE SP? oC_Expression SP? )? '|' SP? oC_Expression SP? ']' ;
+                    :  '[' SP? ( oC_Variable SP? '=' SP? )? oC_RelationshipsPattern SP? ( oC_Where SP? )? '|' SP? oC_Expression SP? ']' ;
 
 oC_PropertyLookup
               :  '.' SP? ( oC_PropertyKeyName ) ;
 
 oC_CaseExpression
-              :  ( ( CASE ( SP? oC_CaseAlternatives )+ ) | ( CASE SP? oC_Expression ( SP? oC_CaseAlternatives )+ ) ) ( SP? ELSE SP? oC_Expression )? SP? END ;
+              :  ( ( CASE ( SP? oC_CaseAlternative )+ ) | ( CASE SP? oC_Expression ( SP? oC_CaseAlternative )+ ) ) ( SP? ELSE SP? oC_Expression )? SP? END ;
 
 CASE : ( 'C' | 'c' ) ( 'A' | 'a' ) ( 'S' | 's' ) ( 'E' | 'e' )  ;
 
@@ -446,8 +450,8 @@ ELSE : ( 'E' | 'e' ) ( 'L' | 'l' ) ( 'S' | 's' ) ( 'E' | 'e' )  ;
 
 END : ( 'E' | 'e' ) ( 'N' | 'n' ) ( 'D' | 'd' )  ;
 
-oC_CaseAlternatives
-                :  WHEN SP? oC_Expression SP? THEN SP? oC_Expression ;
+oC_CaseAlternative
+               :  WHEN SP? oC_Expression SP? THEN SP? oC_Expression ;
 
 WHEN : ( 'W' | 'w' ) ( 'H' | 'h' ) ( 'E' | 'e' ) ( 'N' | 'n' )  ;
 
