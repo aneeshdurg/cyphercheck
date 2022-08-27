@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple
 from antlr4 import *
 
 from gen.CypherLexer import CypherLexer
-from gen.CypherParser import CypherParser
+erom gen.CypherParser import CypherParser
 
 from visitor import *
 
@@ -106,6 +106,8 @@ class Formatter:
             return True
         visitor.visitor(ctx, find_distinct)
 
+        print("ADDING ", start_call)
+
         self.add_or_indent_add(start_call)
 
         with self.indented():
@@ -131,7 +133,50 @@ class Formatter:
                     self.add_ignoring_limit(",")
         self.add_or_indent_add(")")
 
-    def format_OC_NotExpressionContext(ctx):
+    def format_OC_UnaryAddOrSubtractExpressionContext(self, ctx):
+        if len(ctx.children) > 1
+            self.save()
+            sign = ctx.children[1].getText()
+            self.add_ignoring_limit(f" {sign}")
+            if self.last_line_length() >= MAX_LINE_LENGTH:
+                self.restore()
+                self.add_line(self.indent)
+                self.add_or_indent_add(f"{sign} ")
+        self.format_OC_StringListNullOperatorExpression(ctx.oC_StringListNullOperatorExpression())
+
+
+    def format_OC_PowerOfExpressionContext(self, ctx):
+        self.format_OC_BinExpressionContext(
+            ctx.children, self.format_OC_UnaryAddOrSubtractExpressionContext)
+
+    def format_OC_MultiplyDivideModuloExpressionContext(self, ctx):
+        self.format_OC_BinExpressionContext(
+            ctx.children, self.format_OC_PowerOfExpressionContext)
+
+    def format_OC_AddOrSubtractExpressionContext(self, ctx):
+        self.format_OC_BinExpressionContext(
+            ctx.children, self.format_OC_MultiplyDivideModuloExpressionContext)
+
+    def format_OC_ComparisionExpressionContext(self, ctx):
+        # transform the following
+        #   Comparision:
+        #     AddOrSubtract (SP? PartialComparision)*
+        # into
+        #   Comparision:
+        #     AddOrSubtract (CompOP SP? AddOrSubtract)*
+        #   CompOp:
+        #     '=' | '<>' | '<' ...
+        # so that we can use the existing binary operation formatter
+        bin_exp_list = []
+        bin_exp_list.append(ctx.oC_AddOrSubtractExpression())
+        for child in bin_exp_list.children[1:]:
+            if child.getText().isspace():
+                continue
+            bin_exp_list.append(child.children)
+        self.format_OC_BinExpressionContext(
+            bin_exp_list, self.format_OC_AddOrSubtractExpressionContext)
+
+    def format_OC_NotExpressionContext(self, ctx):
         not_count = 0
         def count_nots(ctx):
             nonlocal not_count
@@ -141,41 +186,39 @@ class Formatter:
                 return False
             return True
         visitor(ctx, count_nots)
-        if (count_nots % 2) == 1:
+        if (not_count % 2) == 1:
             self.save()
             self.add_ignoring_limit(" NOT ")
             if self.last_line_length() >= MAX_LINE_LENGTH:
                 self.restore()
                 self.add_line(self.indent)
                 self.add_or_indent_add("NOT ")
+        self.format_OC_ComparisionExpressionContext(ctx.oC_ComparisonExpression())
 
-
-    def format_OC_AndExpressionContext(ctx):
+    def format_OC_AndExpressionContext(self, ctx):
         self.format_OC_BinExpressionContext(
-            ctx,
-            lambda x: x.oC_NotExpression(),
-            self.format_OC_NotExpressionContext,
-            "AND")
+            ctx.children, self.format_OC_NotExpressionContext)
 
-    def format_OC_XOrExpressionContext(ctx):
+    def format_OC_XOrExpressionContext(self, ctx):
         self.format_OC_BinExpressionContext(
-            ctx,
-            lambda x: x.oC_AndExpression(),
-            self.format_OC_AndExpressionContext,
-            "XOR")
+            ctx.children, self.format_OC_AndExpressionContext)
 
-    def format_OC_OrExpressionContext(ctx):
+    def format_OC_OrExpressionContext(self, ctx):
         self.format_OC_BinExpressionContext(
-            ctx,
-            lambda x: x.oC_XOrExpression(),
-            self.format_OC_XOrExpressionContext,
-            "OR")
+            ctx.children, self.format_OC_XOrExpressionContext)
 
-    def format_OC_BinExpressionContext(ctx, get_next, formatter, op: str):
-        parts = get_next(ctx)
+    def format_OC_BinExpressionContext(self, parts, formatter):
         lhs = parts[0]
         formatter(lhs)
-        if len(parts) > 1:
+        i = 1
+        while i < len(parts):
+            while parts[i].getText().isspace():
+                i += 1
+            op = parts[i].getText().upper()
+            i += 1
+            while parts[i].getText().isspace():
+                i += 1
+            operand = parts[i]
             self.save()
             self.add_ignoring_limit(f" {op} ")
             if self.last_line_length() >= MAX_LINE_LENGTH:
